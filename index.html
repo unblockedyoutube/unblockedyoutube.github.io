@@ -223,6 +223,7 @@
 
     .watch-shell{width:100%; display:flex; justify-content:center;}
     .watch{width:min(var(--watchMax), 100%); padding:0 var(--watchPad);}
+
     .player-wrap{
       position:relative;
       border-radius:var(--radius);
@@ -231,8 +232,15 @@
       width:100%;
       aspect-ratio:16/9;
     }
-    /* Player API mounts iframe inside #player */
-    #player{width:100%; height:100%;}
+
+    /* Critical fix: ensure #player has real size and fills the wrapper */
+    #player{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+    }
+
     .watch-title{margin:12px 0 8px; font-size:18px; line-height:1.3; font-weight:700;}
     .watch-sub{color:var(--muted); font-size:13px; margin:0 0 12px;}
     .panel{
@@ -290,7 +298,6 @@
       </div>
     </div>
 
-    <!-- profile/avatar removed -->
     <div class="actions"></div>
   </header>
 
@@ -332,9 +339,6 @@
     </main>
   </div>
 
-  <!-- YouTube IFrame Player API -->
-  <script src="https://www.youtube.com/iframe_api"></script>
-
   <script>
     const API_KEY = "AIzaSyD7DzzaO24wKOXlSdaymut1ORWczmmTlP8";
     const MAX_RESULTS = 20;
@@ -357,8 +361,6 @@
     const resultsView = document.getElementById("resultsView");
     const watchView = document.getElementById("watchView");
 
-    const playerWrap = document.getElementById("playerWrap");
-
     const watchTitle = document.getElementById("watchTitle");
     const watchStats = document.getElementById("watchStats");
     const watchDesc = document.getElementById("watchDesc");
@@ -366,19 +368,33 @@
     const suggestBox = document.getElementById("suggest");
 
     let currentMode = "home"; // home | search | watch
-    let currentQuery = "";
     let nextPageToken = "";
     let homeNextPageToken = "";
     let isFetching = false;
 
     const itemsById = new Map();
 
-    // YouTube Player API
+    // -------------------------
+    // YouTube IFrame Player API (loaded robustly)
+    // -------------------------
     let ytPlayer = null;
-    let ytReady = false;
 
-    window.onYouTubeIframeAPIReady = () => {
-      ytReady = true;
+    function loadYouTubeIframeAPI(){
+      return new Promise((resolve, reject)=>{
+        if (window.YT && window.YT.Player) return resolve();
+
+        const tag = document.createElement("script");
+        tag.src = "https://www.youtube.com/iframe_api";
+        tag.async = true;
+        tag.onerror = () => reject(new Error("Failed to load YouTube IFrame API"));
+
+        window.onYouTubeIframeAPIReady = () => resolve();
+        document.head.appendChild(tag);
+      });
+    }
+
+    async function initPlayer(){
+      await loadYouTubeIframeAPI();
       ytPlayer = new YT.Player("player", {
         width: "100%",
         height: "100%",
@@ -388,14 +404,20 @@
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
-          controls: 1
+          controls: 1,
+          origin: window.location.origin
         },
         events: {
           onError: (e) => showError("YouTube player error: " + e.data)
         }
       });
-    };
+    }
 
+    initPlayer().catch(err => showError(err.message));
+
+    // -------------------------
+    // UI helpers
+    // -------------------------
     function showError(msg){
       errorBox.style.display = "block";
       errorBox.textContent = msg;
@@ -501,6 +523,9 @@
       }
     }
 
+    // -------------------------
+    // YouTube Data API calls
+    // -------------------------
     async function ytFetch(url){
       const res = await fetch(url);
       const data = await res.json();
@@ -628,13 +653,14 @@
       }
     }
 
+    // -------------------------
+    // Navigation / watch
+    // -------------------------
     function doSearchFromUI(){
       const query = q.value.trim();
       if (!query) return;
 
-      currentQuery = query;
       nextPageToken = "";
-
       hideSuggestions();
 
       watchView.style.display = "none";
@@ -674,7 +700,18 @@
       }
     }
 
-    function renderWatch(item){
+    function waitForPlayerReady(){
+      return new Promise((resolve)=>{
+        const t = setInterval(()=>{
+          if (ytPlayer && typeof ytPlayer.loadVideoById === "function"){
+            clearInterval(t);
+            resolve();
+          }
+        }, 50);
+      });
+    }
+
+    async function renderWatch(item){
       currentMode = "watch";
       resultsView.style.display = "none";
       watchView.style.display = "block";
@@ -682,18 +719,6 @@
       const sn = item.snippet || {};
       const st = item.statistics || {};
       const cd = item.contentDetails || {};
-
-      const id = item.id;
-      if (ytPlayer && ytReady){
-        ytPlayer.loadVideoById(id);
-      } else {
-        const t = setInterval(() => {
-          if (ytPlayer && ytReady){
-            clearInterval(t);
-            ytPlayer.loadVideoById(id);
-          }
-        }, 50);
-      }
 
       watchTitle.textContent = sn.title || "";
       watchStats.textContent =
@@ -703,6 +728,9 @@
         ` • ${formatDuration(cd.duration) || ""}`;
 
       watchDesc.textContent = sn.description || "";
+
+      await waitForPlayerReady();
+      ytPlayer.loadVideoById(item.id);
 
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -715,6 +743,9 @@
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
 
+    // -------------------------
+    // Suggestions
+    // -------------------------
     function showSuggestions(items, typed){
       if (!items.length){
         suggestBox.style.display = "none";
@@ -775,6 +806,9 @@
       }, 120);
     }
 
+    // -------------------------
+    // Infinite scroll (home)
+    // -------------------------
     const io = new IntersectionObserver((entries)=>{
       const entry = entries[0];
       if (!entry.isIntersecting) return;
@@ -785,6 +819,9 @@
 
     io.observe(sentinel);
 
+    // -------------------------
+    // Events
+    // -------------------------
     searchBtn.addEventListener("click", doSearchFromUI);
 
     q.addEventListener("keydown", (e)=>{
