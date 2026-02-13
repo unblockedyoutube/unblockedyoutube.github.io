@@ -357,8 +357,13 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
       aspect-ratio:16/9;
     }
 
-    /* YouTube IFrame Player API mounts an iframe inside #player */
-    #player{width:100%; height:100%;}
+    /* IMPORTANT: ensure the player actually fills the box */
+    #player{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+    }
 
     .watch-title{margin:12px 0 8px; font-size:18px; line-height:1.3; font-weight:700;}
     .watch-sub{color:var(--muted); font-size:13px; margin:0 0 12px;}
@@ -417,7 +422,6 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
       </div>
     </div>
 
-    <!-- avatar removed -->
     <div class="actions"></div>
   </header>
 
@@ -443,7 +447,6 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
         <div class="watch-shell">
           <div class="watch">
             <div class="player-wrap" id="playerWrap">
-              <!-- YouTube IFrame Player API mounts into this div -->
               <div id="player"></div>
             </div>
 
@@ -499,28 +502,77 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
 
     const itemsById = new Map();
 
-    // YouTube Player API
+    // --- FIX: Create the player ONLY when Watch view is shown (creating it while hidden often causes black screen)
     let ytPlayer = null;
-    let ytReady = false;
+    let ytApiReady = false;
+    let playerReadyPromise = null;
 
     window.onYouTubeIframeAPIReady = () => {
-      ytReady = true;
-      ytPlayer = new YT.Player("player", {
-        width: "100%",
-        height: "100%",
-        videoId: "",
-        playerVars: {
-          autoplay: 1,
-          rel: 0,
-          modestbranding: 1,
-          playsinline: 1,
-          controls: 1
-        },
-        events: {
-          onError: (e) => showError("YouTube player error: " + e.data)
-        }
-      });
+      ytApiReady = true;
+      // Do NOT create player here. Wait until watch view is visible.
     };
+
+    function ensurePlayer(){
+      if (ytPlayer) return Promise.resolve(ytPlayer);
+
+      if (!playerReadyPromise){
+        playerReadyPromise = new Promise((resolve, reject) => {
+          const start = Date.now();
+
+          const tick = () => {
+            // Wait for API and for Watch view to be visible (non-zero box)
+            const wrap = document.getElementById("playerWrap");
+            const visible = watchView.style.display !== "none";
+            const rect = wrap?.getBoundingClientRect();
+            const hasSize = rect && rect.width > 10 && rect.height > 10;
+
+            if (ytApiReady && visible && hasSize && window.YT && YT.Player){
+              try{
+                ytPlayer = new YT.Player("player", {
+                  // Use numeric size (API is happiest with numbers); CSS still fills the box
+                  width: 640,
+                  height: 360,
+                  videoId: "",
+                  playerVars: {
+                    autoplay: 1,
+                    rel: 0,
+                    modestbranding: 1,
+                    playsinline: 1,
+                    controls: 1
+                  },
+                  events: {
+                    onReady: () => resolve(ytPlayer),
+                    onError: (e) => showError("YouTube player error: " + e.data)
+                  }
+                });
+              }catch(err){
+                reject(err);
+              }
+              return;
+            }
+
+            if (Date.now() - start > 8000){
+              reject(new Error("YouTube Player API did not initialize. If you are opening this as a local file (file://), use a local server (http://localhost)."));
+              return;
+            }
+
+            requestAnimationFrame(tick);
+          };
+
+          requestAnimationFrame(tick);
+        });
+      }
+
+      return playerReadyPromise;
+    }
+
+    function destroyPlayer(){
+      if (ytPlayer && ytPlayer.destroy){
+        try{ ytPlayer.destroy(); }catch{}
+      }
+      ytPlayer = null;
+      playerReadyPromise = null;
+    }
 
     function showError(msg){
       errorBox.style.display = "block";
@@ -765,7 +817,9 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
 
       watchView.style.display = "none";
       resultsView.style.display = "block";
-      if (ytPlayer) ytPlayer.stopVideo();
+
+      // Stop + destroy to prevent stale/black iframe issues when leaving Watch repeatedly
+      destroyPlayer();
 
       hint.style.display = "none";
       runSearch(query);
@@ -800,7 +854,7 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
       }
     }
 
-    function renderWatch(item){
+    async function renderWatch(item){
       currentMode = "watch";
       resultsView.style.display = "none";
       watchView.style.display = "block";
@@ -809,27 +863,21 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
       const st = item.statistics || {};
       const cd = item.contentDetails || {};
 
-      // Load via YouTube IFrame Player API
-      const id = item.id;
-      if (ytPlayer && ytReady){
-        ytPlayer.loadVideoById(id);
-      } else {
-        const t = setInterval(() => {
-          if (ytPlayer && ytReady){
-            clearInterval(t);
-            ytPlayer.loadVideoById(id);
-          }
-        }, 50);
-      }
-
       watchTitle.textContent = sn.title || "";
       watchStats.textContent =
         `${st.viewCount ? `${Number(st.viewCount).toLocaleString()} views` : ""}` +
         `${st.viewCount ? " • " : ""}` +
         `${sn.publishedAt ? new Date(sn.publishedAt).toLocaleDateString() : ""}` +
         ` • ${formatDuration(cd.duration) || ""}`;
-
       watchDesc.textContent = sn.description || "";
+
+      // Ensure player is created AFTER watch view is visible, then load the video.
+      try{
+        const p = await ensurePlayer();
+        p.loadVideoById(item.id);
+      }catch(err){
+        showError(`Error: ${err.message}\n\nIf you're opening this as a local file (file://), run a local server (e.g. VS Code Live Server) so YouTube can embed correctly.`);
+      }
 
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -837,7 +885,10 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
     function goHome(){
       watchView.style.display = "none";
       resultsView.style.display = "block";
-      if (ytPlayer) ytPlayer.stopVideo();
+
+      // Stop + destroy player to avoid black screen on next open
+      destroyPlayer();
+
       loadHome(true);
       window.scrollTo({ top: 0, behavior: "smooth" });
     }
@@ -942,4 +993,4 @@ PASTE YOUR FULL WEBSITE CODE FOR SLOT 8 HERE
        If your site contains that exact text, change it or split it.
        ========================================================== -->
 </body>
-</html>
+</ht
