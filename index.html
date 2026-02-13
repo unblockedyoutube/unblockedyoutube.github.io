@@ -1,9 +1,10 @@
+<!-- index.html (ONLY FILE). Paste your full websites in the 10 boxes below. -->
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Time-Based Loader (Single URL)</title>
+  <title>YouTube</title>
 
   <style>
     html, body { height: 100%; margin: 0; }
@@ -11,10 +12,9 @@
   </style>
 
   <script>
-    // Change if needed
     const TIME_ZONE = "America/Chicago";
 
-    function getNowInTimeZoneParts(tz) {
+    function nowParts(tz) {
       const fmt = new Intl.DateTimeFormat("en-US", {
         timeZone: tz,
         hour: "2-digit",
@@ -24,57 +24,46 @@
       });
       const parts = fmt.formatToParts(new Date());
       const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-      return { hour: +map.hour, minute: +map.minute, second: +map.second };
+      return { h: +map.hour, m: +map.minute, s: +map.second };
     }
 
-    function minutesSinceMidnightTZ(tz) {
-      const { hour, minute, second } = getNowInTimeZoneParts(tz);
-      return hour * 60 + minute + (second / 60);
+    function minutesSinceMidnight(tz) {
+      const { h, m, s } = nowParts(tz);
+      return h * 60 + m + (s / 60);
     }
 
     function pickSlot(mins) {
-      // Slot 0: 12:00 AM -> 7:00 AM
-      const start = 7 * 60;         // 420
-      const end = 14 * 60 + 25;     // 865
-      const span = end - start;     // 445
-      const seg = span / 8;         // 55.625 minutes (55m 37.5s)
+      const start = 7 * 60;          // 7:00 AM
+      const end = 14 * 60 + 25;      // 2:25 PM
+      const seg = (end - start) / 8; // 55.625 minutes
 
       if (mins < start) return 0;
-
       if (mins >= start && mins < end) {
-        const offset = mins - start;
-        const i = Math.floor(offset / seg); // 0..7
-        return 1 + Math.min(Math.max(i, 0), 7); // 1..8
+        const i = Math.floor((mins - start) / seg); // 0..7
+        return 1 + Math.min(Math.max(i, 0), 7);     // 1..8
       }
-
-      // Slot 9: 2:25 PM -> 12:00 AM
       return 9;
     }
 
-    function loadSlot(slotIndex) {
-      const tpl = document.getElementById(`site-${slotIndex}`);
-      if (!tpl) {
-        document.body.innerHTML = `<pre>Missing template: site-${slotIndex}</pre>`;
+    function loadSlot(slot) {
+      const box = document.getElementById(`PASTE_SLOT_${slot}`);
+      if (!box) {
+        document.body.innerHTML = `<pre>Missing PASTE_SLOT_${slot}</pre>`;
         return;
       }
-      // Load the selected full HTML into the iframe. URL stays the same.
-      const frame = document.getElementById("frame");
-      frame.srcdoc = tpl.innerHTML;
+      document.getElementById("frame").srcdoc = box.innerHTML;
     }
 
-    function boot() {
-      const mins = minutesSinceMidnightTZ(TIME_ZONE);
-      const slot = pickSlot(mins);
-      loadSlot(slot);
-    }
-
-    window.addEventListener("DOMContentLoaded", boot);
+    window.addEventListener("DOMContentLoaded", () => {
+      loadSlot(pickSlot(minutesSinceMidnight(TIME_ZONE)));
+    });
   </script>
 </head>
 
 <body>
+  <!-- The chosen website is loaded here (URL stays the same) -->
   <iframe id="frame"></iframe>
-
+  
   <!-- ==========================================================
        ✅ ALL YOU DO: PASTE FULL HTML BETWEEN EACH PAIR OF MARKERS
        Paste INCLUDING: <!doctype html> ... </html>
